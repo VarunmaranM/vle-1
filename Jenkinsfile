@@ -8,7 +8,7 @@ pipeline {
 
     parameters {
         string(name: 'DOCKER_REGISTRY', defaultValue: 'docker.io', description: 'Docker registry (eg. docker.io or 123456789012.dkr.ecr.us-east-1.amazonaws.com)')
-        string(name: 'DOCKER_REPO', defaultValue: 'yourdockerhubusername/my-web-app', description: 'Repository/name for the image')
+        string(name: 'DOCKER_REPO', defaultValue: 'varunmaran/my-web-app', description: 'Repository/name for the image')
         string(name: 'K8S_NAMESPACE', defaultValue: 'default', description: 'Kubernetes namespace to deploy into')
     }
 
@@ -24,11 +24,33 @@ pipeline {
             }
         }
 
+        stage('Check Prerequisites') {
+            steps {
+                script {
+                    // Check if Docker is installed
+                    def dockerCheck = sh(script: 'which docker', returnStatus: true)
+                    if (dockerCheck != 0) {
+                        error "Docker is not installed on this agent. Please install Docker first."
+                    }
+                    
+                    // Check Docker daemon is running
+                    def dockerInfo = sh(script: 'docker info', returnStatus: true)
+                    if (dockerInfo != 0) {
+                        error "Docker daemon is not running or current user doesn't have permission to access it."
+                    }
+                }
+            }
+        }
+
         stage('Build Docker Image') {
             steps {
                 script {
-                    echo "Building image ${DOCKER_IMAGE}"
-                    docker.build("${DOCKER_IMAGE}", '.')
+                    try {
+                        echo "Building image ${DOCKER_IMAGE}"
+                        sh "docker build -t ${DOCKER_IMAGE} ."
+                    } catch (Exception e) {
+                        error "Failed to build Docker image: ${e.getMessage()}"
+                    }
                 }
             }
         }
