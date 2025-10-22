@@ -11,13 +11,6 @@ pipeline {
     }
 
     stages {
-        stage('1. Checkout Code') {
-            steps {
-                // Clones your Git repository
-                git 'https://github.com/your-username/your-repo.git'
-            }
-        }
-
         stage('2. Build Docker Image') {
             steps {
                 script {
