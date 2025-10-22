@@ -14,9 +14,9 @@ spec:
     spec:
       containers:
       - name: my-web-app-container
-        image: IMAGE_PLACEHOLDER # Jenkins will replace this
+        image: IMAGE_PLACEHOLDER # Jenkins will replace this with ${DOCKER_IMAGE}
         ports:
         - containerPort: 5000
         env:
         - name: APP_VERSION
-          value: "v1.0" # You can update this value with each commit
+          value: "IMAGE_TAG_PLACEHOLDER" # Jenkins will update this to the build number or tag

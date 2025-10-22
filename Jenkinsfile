@@ -1,62 +1,83 @@
 pipeline {
-    agent any // Run on any available Jenkins agent
+    agent any
 
-    // Environment variables used throughout the pipeline
+    options {
+        skipDefaultCheckout(true)
+        timestamps()
+    }
+
+    parameters {
+        string(name: 'DOCKER_REGISTRY', defaultValue: 'docker.io', description: 'Docker registry (eg. docker.io or 123456789012.dkr.ecr.us-east-1.amazonaws.com)')
+        string(name: 'DOCKER_REPO', defaultValue: 'yourdockerhubusername/my-web-app', description: 'Repository/name for the image')
+        string(name: 'K8S_NAMESPACE', defaultValue: 'default', description: 'Kubernetes namespace to deploy into')
+    }
+
     environment {
-        DOCKER_HUB_CREDS = credentials('dockerhub-creds') // The ID you set in Jenkins
-        KUBECONFIG_CREDS = credentials('kubeconfig-creds') // The ID you set in Jenkins
-        DOCKER_HUB_USER = "yourdockerhubusername"
-        APP_NAME = "my-web-app"
-        DOCKER_IMAGE = "${DOCKER_HUB_USER}/${APP_NAME}:${env.BUILD_NUMBER}" // e.g., yourdockerhubusername/my-web-app:1
+        IMAGE_TAG = "${env.BUILD_NUMBER}"
+        DOCKER_IMAGE = "${params.DOCKER_REGISTRY}/${params.DOCKER_REPO}:${IMAGE_TAG}"
     }
 
     stages {
-        stage('1. Checkout Code') {
+        stage('Checkout') {
             steps {
-                // Clones your Git repository
-                git 'https://github.com/your-username/your-repo.git'
+                checkout scm
             }
         }
 
-        stage('2. Build Docker Image') {
+        stage('Build Docker Image') {
             steps {
                 script {
-                    // Builds the Docker image using the Dockerfile in your repo
-                    echo "Building image: ${DOCKER_IMAGE}"
-                    docker.build(DOCKER_IMAGE, '.')
+                    echo "Building image ${DOCKER_IMAGE}"
+                    docker.build("${DOCKER_IMAGE}", '.')
                 }
             }
         }
 
-        stage('3. Push to Docker Hub') {
+        stage('Push Image') {
             steps {
                 script {
-                    // Logs into Docker Hub using the stored credentials and pushes the image
-                    docker.withRegistry('https://registry.hub.docker.com', DOCKER_HUB_CREDS) {
-                        echo "Pushing image: ${DOCKER_IMAGE}"
-                        docker.image(DOCKER_IMAGE).push()
+                    // Uses the Jenkins credential id 'dockerhub-creds' (username/password) configured in Jenkins
+                    docker.withRegistry("https://${params.DOCKER_REGISTRY}", 'dockerhub-creds') {
+                        echo "Pushing image ${DOCKER_IMAGE}"
+                        docker.image("${DOCKER_IMAGE}").push()
+                        // Also push the 'latest' tag if desired
+                        docker.image("${DOCKER_IMAGE}").push('latest')
                     }
                 }
             }
         }
 
-        stage('4. Deploy to Kubernetes') {
+        stage('Deploy to Kubernetes') {
             steps {
-                // This block makes the kubeconfig file available for kubectl commands
-                withKubeConfig([credentialsId: KUBECONFIG_CREDS]) {
-                    // Replace the placeholder in the deployment file with the actual image name
-                    sh "sed -i 's|IMAGE_PLACEHOLDER|${DOCKER_IMAGE}|g' deployment.yaml"
+                script {
+                    // Make kubeconfig available via credentials id 'kubeconfig-creds' (Secret File)
+                    withKubeConfig([credentialsId: 'kubeconfig-creds']) {
+                        echo "Updating deployment image to ${DOCKER_IMAGE} in namespace ${params.K8S_NAMESPACE}"
 
-                    // Apply the updated deployment and the service manifest to your cluster
-                    echo "Applying Kubernetes manifests..."
-                    sh "kubectl apply -f deployment.yaml"
-                    sh "kubectl apply -f service.yaml"
+                        // Try to update the existing deployment image; if deployment does not exist, apply manifests
+                        def setImageCmd = "kubectl set image deployment/my-web-app my-web-app-container=${DOCKER_IMAGE} -n ${params.K8S_NAMESPACE} --record"
+                        def applyCmd = "kubectl apply -f deployment.yaml -n ${params.K8S_NAMESPACE} && kubectl apply -f service.yaml -n ${params.K8S_NAMESPACE}"
 
-                    // Wait for the deployment to complete successfully
-                    echo "Waiting for rollout to complete..."
-                    sh "kubectl rollout status deployment/my-web-app"
+                        // Run set image; if it fails (deployment missing) fall back to apply
+                        sh "${setImageCmd} || ${applyCmd}"
+
+                        // Update APP_VERSION env on the deployment for visibility
+                        sh "kubectl set env deployment/my-web-app APP_VERSION=${IMAGE_TAG} -n ${params.K8S_NAMESPACE} || true"
+
+                        // Wait for rollout to complete
+                        sh "kubectl rollout status deployment/my-web-app -n ${params.K8S_NAMESPACE}"
+                    }
                 }
             }
+        }
+    }
+
+    post {
+        success {
+            echo "Deployment successful: ${DOCKER_IMAGE}"
+        }
+        failure {
+            echo "Pipeline failed"
         }
     }
 }
